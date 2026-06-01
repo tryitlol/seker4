@@ -567,19 +567,65 @@ def track(uid: str, mid: int):
 # ════════════════════════════════════════════
 #  USER HELPERS
 # ════════════════════════════════════════════
-def get_or_create_user(uid,username="",first_name=""):
+def get_or_create_user(uid, username="", first_name=""):
     users = load_users()
+
     if uid not in users:
-        users[uid] = {"username":username,"first_name":first_name,"banned":False,
-                      "vip":False,"activated":False,"total_checked":0,"sessions_count":0,
-                      "sessions_since_cd":0,"last_cd_at":None,"key_used":None,
-                      "key_expires_at":None,"joined":datetime.now().isoformat(),
-                      "last_seen":datetime.now().isoformat()}
+
+        users[uid] = {
+            "username": username,
+            "first_name": first_name,
+
+            "banned": False,
+            "vip": False,
+            "activated": False,
+
+            # existing stats
+            "total_checked": 0,
+            "sessions_count": 0,
+            "sessions_since_cd": 0,
+            "last_cd_at": None,
+
+            # key system
+            "key_used": None,
+            "key_expires_at": None,
+
+            # timestamps
+            "joined": datetime.now().isoformat(),
+            "last_seen": datetime.now().isoformat()
+        }
+
     else:
-        if username:   users[uid]["username"]   = username
-        if first_name: users[uid]["first_name"] = first_name
-        users[uid]["last_seen"] = datetime.now().isoformat()
+
+        user = users[uid]
+
+        if username:
+            user["username"] = username
+
+        if first_name:
+            user["first_name"] = first_name
+
+        user["last_seen"] = datetime.now().isoformat()
+
+        # add defaults for older accounts
+        user.setdefault("referrals", 0)
+        user.setdefault("referred_by", None)
+        user.setdefault("ref_rewarded", False)
+
+        user.setdefault("banned", False)
+        user.setdefault("vip", False)
+        user.setdefault("activated", False)
+
+        user.setdefault("total_checked", 0)
+        user.setdefault("sessions_count", 0)
+        user.setdefault("sessions_since_cd", 0)
+
+        user.setdefault("last_cd_at", None)
+        user.setdefault("key_used", None)
+        user.setdefault("key_expires_at", None)
+
     save_users(users)
+
     return users[uid], users
 
 def is_admin(uid: int, cfg: dict) -> bool:
@@ -662,42 +708,141 @@ async def in_channel(bot,uid,ch) -> bool:
         return m.status in (ChatMember.MEMBER,ChatMember.ADMINISTRATOR,ChatMember.OWNER)
     except: return False
 
-async def join_prompt(target,ch):
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel",url=f"https://t.me/{ch}")],
-                                [InlineKeyboardButton("✅ I Joined — Verify Now",callback_data="check_join")]])
-    txt = (f"🔒 <b>Channel Verification Required</b>\n\nPlease join <b>@{ch}</b> to continue using the bot.\n\nAfter joining, press <b>Verify Membership</b> below.")
-    if hasattr(target,"edit_message_text"): await target.edit_message_text(txt,reply_markup=kb,parse_mode=ParseMode.HTML)
-    else: await target.reply_text(txt,reply_markup=kb,parse_mode=ParseMode.HTML)
+async def join_prompt(target, ch):
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "📢 Join Channel",
+                url=f"https://t.me/{ch}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✅ I Joined — Verify Now",
+                callback_data="verify_join"
+            )
+        ]
+    ])
 
-async def gate(update,context,require_key=True):
-    tg=update.effective_user; uid=str(tg.id); cfg=load_config()
-    if is_admin(tg.id,cfg):
-        ud,u=get_or_create_user(uid,tg.username or "",tg.first_name or ""); return True,ud,u
-    ud,u=get_or_create_user(uid,tg.username or "",tg.first_name or "")
-    if ud.get("banned"):
-        await update.effective_message.reply_text("🚫 You are <b>banned</b>.",parse_mode=ParseMode.HTML); return False,None,u
-    if require_key:
-        if not ud.get("activated"):
-            await update.effective_message.reply_text("🔑 Use <code>/redeem YOUR_KEY</code>.",parse_mode=ParseMode.HTML); return False,None,u
-        if check_key_expiry(uid):
-            await update.effective_message.reply_text("⏰ <b>Key Expired.</b> Contact admin.",parse_mode=ParseMode.HTML); return False,None,load_users()
-    if cfg.get("locked") and not ud.get("vip"):
-        await update.effective_message.reply_text(
-    "🔒 <b>Maintenance Mode Enabled</b>\n\nThe bot is temporarily unavailable.",parse_mode=ParseMode.HTML); return False,None,u
-    return True,ud,u
+    txt = (
+        f"🔒 <b>Channel Verification Required</b>\n\n"
+        f"Please join <b>@{ch}</b> to continue using the bot.\n\n"
+        f"After joining, press <b>Verify Membership</b> below."
+    )
 
-async def gate_cb(query,context):
-    tg=query.from_user; uid=str(tg.id); cfg=load_config()
-    if is_admin(tg.id,cfg):
-        ud,u=get_or_create_user(uid,tg.username or "",tg.first_name or ""); return True,ud,u
-    ud,u=get_or_create_user(uid,tg.username or "",tg.first_name or "")
-    if ud.get("banned"): await query.answer("🚫 Access Restricted",show_alert=True); return False,None,u
-    if not ud.get("activated") and not is_admin(tg.id,cfg):
-        await query.answer("🔑 Use /redeem KEY!",show_alert=True); return False,None,u
-    if check_key_expiry(uid): await query.answer("⏰ Key expired!",show_alert=True); return False,None,load_users()
-    if load_config().get("locked") and not ud.get("vip"):
-        await query.answer("🔒 Bot locked!",show_alert=True); return False,None,u
-    return True,ud,u
+    try:
+        if hasattr(target, "edit_message_text"):
+            await target.edit_message_text(
+                txt,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await target.reply_text(
+                txt,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+    except:
+        try:
+            await target.reply_text(
+                txt,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+        except:
+            pass
+
+async def gate(update, context):
+    cfg = load_config()
+
+    tg = update.effective_user
+    uid = str(tg.id)
+
+    u, created = get_or_create_user(
+        uid,
+        tg.username or "",
+        tg.first_name or ""
+    )
+
+    # ONLY admin bypass
+    if is_admin(tg.id, cfg):
+        return True, cfg, u
+
+    force_channel = (
+        cfg.get("channel_username", "")
+        .replace("@", "")
+        .strip()
+    )
+
+    if force_channel:
+
+        joined = await in_channel(
+            context.bot,
+            uid,
+            force_channel
+        )
+
+        if not joined:
+
+            await join_prompt(
+                update.effective_message,
+                force_channel
+            )
+
+            return False, None, u
+
+    return True, cfg, u
+
+
+async def gate_cb(update, context):
+    cfg = load_config()
+
+    q = update.callback_query
+    uid = str(q.from_user.id)
+
+    u, created = get_or_create_user(
+        uid,
+        q.from_user.username or "",
+        q.from_user.first_name or ""
+    )
+
+    # ONLY admin bypass
+    if is_admin(q.from_user.id, cfg):
+        return True, cfg, u
+
+    force_channel = (
+        cfg.get("channel_username", "")
+        .replace("@", "")
+        .strip()
+    )
+
+    if force_channel:
+
+        joined = await in_channel(
+            context.bot,
+            uid,
+            force_channel
+        )
+
+        if not joined:
+
+            try:
+                await q.answer(
+                    "❌ Join the channel first.",
+                    show_alert=True
+                )
+            except:
+                pass
+
+            await join_prompt(
+                q.message,
+                force_channel
+            )
+
+            return False, None, u
+
+    return True, cfg, u
 
 def admin_only(fn):
     @wraps(fn)
@@ -752,14 +897,14 @@ def stats_card(done, total, stats, ll="", cl="", result_folder=None):
 
 📦 {done:,} / {total:,}
 
-━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━
 ✅ Valid      : {valid:,}
 ❌ Invalid    : {invalid:,}
 ✨ Clean      : {clean:,}
 ⚠️ Not Clean  : {not_clean:,}
 🎮 Has CODM   : {codm:,}
 📭 No CODM    : {no_codm:,}
-━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━
 """
 
     # ── ORIGINAL WORKING LOGIC ─────────────────────────
@@ -788,7 +933,7 @@ def stats_card(done, total, stats, ll="", cl="", result_folder=None):
             if hits > 0:
 
                 # LEVELS
-                text += "\n📈 LEVEL DISTRIBUTION\n\n"
+                text += "\n📈 Level Distribution\n\n"
 
                 for rng, cnt in lvl.items():
                     pct2 = cnt / hits * 100
@@ -806,8 +951,8 @@ def stats_card(done, total, stats, ll="", cl="", result_folder=None):
                     )
 
                 # SERVERS
-                text += "\n━━━━━━━━━━━━━━━━━━\n"
-                text += "\n🌏 SERVER DISTRIBUTION\n\n"
+                text += "\n━━━━━━━━━━━━━━━━━━━\n"
+                text += "\n🌏 Server Distribution\n\n"
 
                 for country, cnt in list(ctr.items())[:6]:
                     pct3 = cnt / hits * 100
@@ -1481,58 +1626,131 @@ def run_checker(uid,combo_file,result_folder,limit,threads,stop_event,
 # ════════════════════════════════════════════
 #  DELIVER RESULTS
 # ════════════════════════════════════════════
-async def deliver_results(bot,chat_id,uid,zip_paths,stats,combo_file=None,note="",partial=False):
-    """Send results summary + zip(s).
-    zip_paths : Path | list[Path] | None
-    partial   : True = keep combo, label as partial and continue
-    After final delivery: silently backup to admin then delete result files.
+async def deliver_results(
+    bot,
+    chat_id,
+    uid,
+    zip_paths,
+    stats,
+    combo_file=None,
+    note="",
+    partial=False
+):
     """
-    icon  = "⏸" if partial else ("🛑" if note else "🏁")
-    label = "Partial Results" if partial else ("Stopped" if note else "Finished")
-    note_clean = ""  # don't show note in title (avoids "Stopped (Stopped)!")
-    t = stats.get("total",0)
-    clean_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Delete All Bot Messages",callback_data="delete_all_msgs")]])
-    try:
-        m=await bot.send_message(chat_id=chat_id,parse_mode=ParseMode.HTML,reply_markup=clean_kb,
-            text=(f"{icon} <b>{label}!</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-                  f"📊 Processed  : <code>{t:,}</code>\n━━━━━━━━━━━━━━━━━━━━\n"
-                  f"✅ Valid      : <code>{stats.get('valid',0):,}</code>\n"
-                  f"❌ Invalid    : <code>{stats.get('invalid',0):,}</code>\n"
-                  f"✨ Clean      : <code>{stats.get('clean',0):,}</code>\n"
-                  f"⚠️  Not Clean  : <code>{stats.get('not_clean',0):,}</code>\n"
-                  f"🎮 Has CODM   : <code>{stats.get('has_codm',0):,}</code>\n"
-                  f"📭 No CODM    : <code>{stats.get('no_codm',0):,}</code>\n"
-                  f"━━━━━━━━━━━━━━━━━━━━\n"
-                  f"{'📦 Partial — checking still continues! 👇' if partial else '⚡ Checking complete!'}"))
-        if m: track(uid,m.message_id)
-    except: pass
+    Send results summary + zip(s)
+    """
 
-    # Normalise to list
-    if zip_paths is None: zip_paths=[]
-    elif not isinstance(zip_paths,list): zip_paths=[zip_paths]
-    zip_paths=[Path(p) for p in zip_paths if p and Path(p).exists() and Path(p).stat().st_size>100]
+    icon = "⏸" if partial else ("🛑" if note else "🏁")
+    label = (
+        "Partial Results"
+        if partial
+        else ("Stopped" if note else "Finished")
+    )
+
+    clean_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🗑 Delete All Bot Messages",
+                callback_data="delete_all_msgs"
+            )
+        ]
+    ])
+
+    t = stats.get("total", 0)
+
+    result_text = f"""
+<pre>
+{icon} {label}!
+━━━━━━━━━━━━━━━━━━━━
+📊 Processed  : {t:,}
+━━━━━━━━━━━━━━━━━━━━
+✅ Valid      : {stats.get('valid',0):,}
+❌ Invalid    : {stats.get('invalid',0):,}
+✨ Clean      : {stats.get('clean',0):,}
+⚠️ Not Clean  : {stats.get('not_clean',0):,}
+🎮 Has CODM   : {stats.get('has_codm',0):,}
+📭 No CODM    : {stats.get('no_codm',0):,}
+━━━━━━━━━━━━━━━━━━━━
+{"📦 Partial — checking still continues!" if partial else "⚡ Checking complete!"}
+</pre>
+"""
+
+    try:
+        m = await bot.send_message(
+            chat_id=chat_id,
+            text=result_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=clean_kb
+        )
+
+        if m:
+            track(uid, m.message_id)
+
+    except Exception as e:
+        print(e)
+
+    # normalize zip list
+    if zip_paths is None:
+        zip_paths = []
+
+    elif not isinstance(zip_paths, list):
+        zip_paths = [zip_paths]
+
+    zip_paths = [
+        Path(p)
+        for p in zip_paths
+        if p and Path(p).exists()
+        and Path(p).stat().st_size > 100
+    ]
 
     if zip_paths:
-        total_parts=len(zip_paths)
-        for idx,zp in enumerate(zip_paths,1):
-            try:
-                if total_parts>1:
-                    cap=(f"📦 Part {idx}/{total_parts} — "
-                         f"{'checking still continues!' if partial else 'your results!'}")
-                else:
-                    cap="📦 Partial — new results will follow when ready!" if partial else "📦 Your results — enjoy!"
-                with open(zp,"rb") as f:
-                    dm=await bot.send_document(chat_id=chat_id,document=f,filename=zp.name,caption=cap)
-                if dm: track(uid,dm.message_id)
-            except Exception as e:
-                em=await bot.send_message(chat_id=chat_id,text=f"⚠️ Could not send {zp.name}: {e}")
-                if em: track(uid,em.message_id)
-    else:
-        if not partial:
-            nm=await bot.send_message(chat_id=chat_id,text="📭 No hit files (0 results).")
-            if nm: track(uid,nm.message_id)
 
-    if combo_file and not partial: del_combo(combo_file)
+        total_parts = len(zip_paths)
+
+        for idx, zp in enumerate(zip_paths, 1):
+
+            try:
+
+                caption = (
+                    f"📦 Part {idx}/{total_parts}"
+                    if total_parts > 1
+                    else "📦 Results"
+                )
+
+                with open(zp, "rb") as f:
+
+                    dm = await bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=zp.name,
+                        caption=caption
+                    )
+
+                if dm:
+                    track(uid, dm.message_id)
+
+            except Exception as e:
+
+                em = await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ Could not send {zp.name}\n{e}"
+                )
+
+                if em:
+                    track(uid, em.message_id)
+
+    elif not partial:
+
+        nm = await bot.send_message(
+            chat_id=chat_id,
+            text="📭 No hit files (0 results)."
+        )
+
+        if nm:
+            track(uid, nm.message_id)
+
+    if combo_file and not partial:
+        del_combo(combo_file)
 
     # ── After final delivery: delete result folder ──
     if not partial:
@@ -1551,86 +1769,385 @@ async def deliver_results(bot,chat_id,uid,zip_paths,stats,combo_file=None,note="
 #  USER COMMANDS
 # ════════════════════════════════════════════
 async def cmd_start(update,context):
-    cfg=load_config(); tg=update.effective_user; uid=str(tg.id)
-    ud,_=get_or_create_user(uid,tg.username or "",tg.first_name or "")
+    cfg=load_config()
+    tg=update.effective_user
+    uid=str(tg.id)
 
-    if ud.get("banned") and not is_admin(tg.id,cfg):
+    ud,_=get_or_create_user(
+        uid,
+        tg.username or "",
+        tg.first_name or ""
+    )
+
+    # Process referral link
+    if context.args:
+
+        ref=context.args[0]
+
+        if ref.startswith("REF_"):
+
+            inviter=ref.replace("REF_","")
+
+            if inviter!=uid:
+
+                process_referral(
+                    inviter,
+                    uid
+                )
+
+                ud,_=get_or_create_user(
+                    uid,
+                    tg.username or "",
+                    tg.first_name or ""
+                )
+
+    if ud.get("banned") and not is_admin(
+        tg.id,
+        cfg
+    ):
+
         await update.message.reply_text(
             "🚫 <b>Access Suspended</b>\n\n"
             "Your account is restricted from using this bot.",
             parse_mode=ParseMode.HTML
         )
+
         return
 
-    if not ud.get("activated") and not is_admin(tg.id,cfg):
+    # FORCE CHANNEL CHECK
+    force_channel=cfg.get(
+        "force_channel",
+        ""
+    )
+
+    if (
+        force_channel
+        and not is_admin(
+            tg.id,
+            cfg
+        )
+    ):
+
+        force_channel=(
+            force_channel
+            .replace("@","")
+            .strip()
+        )
+
+        joined=False
+
+        try:
+
+            member=await context.bot.get_chat_member(
+                chat_id=f"@{force_channel}",
+                user_id=int(uid)
+            )
+
+            joined=member.status in (
+                ChatMember.MEMBER,
+                ChatMember.ADMINISTRATOR,
+                ChatMember.OWNER
+            )
+
+        except:
+
+            joined=False
+
+        if not joined:
+
+            kb=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "📢 Join Channel",
+                        url=f"https://t.me/{force_channel}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "✅ Verify",
+                        callback_data="verify_join"
+                    )
+                ]
+            ])
+
+            await update.message.reply_text(
+                "🔒 <b>Channel Verification Required</b>\n\n"
+                "Join the channel then press Verify.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb
+            )
+
+            return
+
+    # Activation block
+    if not ud.get("activated") and not is_admin(
+        tg.id,
+        cfg
+    ):
+
+        me=await context.bot.get_me()
+
+        refs=ud.get(
+            "referrals",
+            0
+        )
+
+        ref_link=(
+            f"https://t.me/{me.username}"
+            f"?start=REF_{uid}"
+        )
+
         await update.message.reply_text(
             "🔑 <b>Activation Required</b>\n\n"
-            "Use <code>/redeem YOUR_KEY</code> to activate your access.",
+
+            "Use <code>/redeem YOUR_KEY</code> "
+            "to activate your access.",
+
             parse_mode=ParseMode.HTML
         )
+
         return
 
-    if not is_admin(tg.id,cfg) and check_key_expiry(uid):
+    if (
+        not is_admin(
+            tg.id,
+            cfg
+        )
+        and check_key_expiry(uid)
+    ):
+
         await update.message.reply_text(
             "⏰ <b>Subscription Expired</b>\n\n"
             "Please contact an administrator to renew your access.",
             parse_mode=ParseMode.HTML
         )
+
         return
 
-    if cfg.get("locked") and not is_admin(tg.id,cfg) and not ud.get("vip"):
+    if (
+        cfg.get("locked")
+        and not is_admin(
+            tg.id,
+            cfg
+        )
+        and not ud.get("vip")
+    ):
+
         await update.message.reply_text(
             "🔒 <b>Maintenance Mode Enabled</b>\n\n"
             "The bot is temporarily unavailable.",
             parse_mode=ParseMode.HTML
         )
+
         return
 
-    vt=" 👑 <b>VIP</b>" if ud.get("vip") else ""
-    at=" ⚙️ <b>ADMIN</b>" if is_admin(tg.id,cfg) else ""
+    vt=(
+        " 👑 <b>VIP</b>"
+        if ud.get("vip")
+        else ""
+    )
 
-    iv=ud.get("vip") or is_admin(tg.id,cfg)
-    lim=cfg.get("vip_limit") if iv else cfg.get("global_limit")
+    at=(
+        " ⚙️ <b>ADMIN</b>"
+        if is_admin(
+            tg.id,
+            cfg
+        )
+        else ""
+    )
 
-    ls=f"\n• Line Limit: <code>{lim:,}</code>" if lim else ""
+    iv=(
+        ud.get("vip")
+        or is_admin(
+            tg.id,
+            cfg
+        )
+    )
 
-    cd_on,cd_left=check_cooldown(uid,cfg)
+    lim=(
+        cfg.get("vip_limit")
+        if iv
+        else cfg.get("global_limit")
+    )
+
+    ls=(
+        f"\n• Line Limit: "
+        f"<code>{lim:,}</code>"
+        if lim
+        else ""
+    )
+
+    cd_on,cd_left=check_cooldown(
+        uid,
+        cfg
+    )
+
     cd_s=""
 
     if cd_on:
-        h,m_=int(cd_left//60),int(cd_left%60)
-        cd_s=f"\n• Cooldown: <code>{'%dh %dm'%(h,m_) if h else '%dm'%m_} remaining</code>"
 
-    exp_s="" if is_admin(tg.id,cfg) else f"\n• Key Expires: <code>{fmt_expiry(ud.get('key_expires_at'))}</code>"
+        h,m_=(
+            int(cd_left//60),
+            int(cd_left%60)
+        )
 
-    if is_admin(tg.id,cfg):
+        cd_s=(
+            "\n• Cooldown: "
+            f"<code>"
+            f"{'%dh %dm'%(h,m_) if h else '%dm'%m_}"
+            "</code>"
+        )
+
+    exp_s=(
+        ""
+        if is_admin(
+            tg.id,
+            cfg
+        )
+        else (
+            "\n• Key Expires: "
+            f"<code>"
+            f"{fmt_expiry(ud.get('key_expires_at'))}"
+            "</code>"
+        )
+    )
+
+    if is_admin(
+        tg.id,
+        cfg
+    ):
+
         kb=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📂 Check Accounts",callback_data="start_check")],
-            [InlineKeyboardButton("⚙️ Admin Panel",callback_data="open_admin_panel")],
+            [
+                InlineKeyboardButton(
+                    "📂 Check Accounts",
+                    callback_data="start_check"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⚙️ Admin Panel",
+                    callback_data="open_admin_panel"
+                )
+            ]
         ])
+
     else:
+
         kb=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📂 Check Accounts",callback_data="start_check")]
+            [
+                InlineKeyboardButton(
+                    "📂 Check Accounts",
+                    callback_data="start_check"
+                )
+            ]
         ])
 
     m=await update.message.reply_text(
-        f"⚡ <b>Garena CODM Checker{vt}{at}</b>\n\n"
 
-        f"<b>Account Information</b>\n"
-        f"• User: <b>{tg.first_name}</b>\n"
-        f"• User ID: <code>{tg.id}</code>\n"
-        f"• Total Checked: <code>{ud.get('total_checked',0):,}</code>\n"
-        f"• Sessions: <code>{ud.get('sessions_count',0)}</code>"
+        f"⚡ <b>Garena CODM Checker"
+        f"{vt}{at}</b>\n\n"
+
+        "<b>Account Information</b>\n"
+
+        f"• User: "
+        f"<b>{tg.first_name}</b>\n"
+
+        f"• User ID: "
+        f"<code>{tg.id}</code>\n"
+
+        f"• Total Checked: "
+        f"<code>{ud.get('total_checked',0):,}</code>\n"
+
+        f"• Sessions: "
+        f"<code>{ud.get('sessions_count',0)}</code>"
+
         f"{ls}{cd_s}{exp_s}\n\n"
 
-        f"Press <b>Check Accounts</b> below to begin.",
+        "Press <b>Check Accounts</b> "
+        "below to begin.",
 
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
 
     if m:
-        track(uid,m.message_id)
+
+        track(
+            uid,
+            m.message_id
+        )
+        
+async def verify_join(update,context):
+
+    q=update.callback_query
+
+    await q.answer()
+
+    cfg=load_config()
+
+    uid=str(q.from_user.id)
+
+    force_channel=cfg.get(
+        "force_channel",
+        ""
+    )
+
+    if not force_channel:
+        return
+
+    force_channel=(
+        force_channel
+        .replace("@","")
+        .strip()
+    )
+
+    joined=False
+
+    try:
+
+        member=await context.bot.get_chat_member(
+            chat_id=f"@{force_channel}",
+            user_id=q.from_user.id
+        )
+
+        joined=member.status in (
+            ChatMember.MEMBER,
+            ChatMember.ADMINISTRATOR,
+            ChatMember.OWNER
+        )
+
+    except:
+        joined=False
+
+    if not joined:
+
+        await q.answer(
+            "❌ Join the channel first.",
+            show_alert=True
+        )
+
+        return
+
+    try:
+        await q.message.delete()
+    except:
+        pass
+
+    fake=type(
+        "obj",
+        (),
+        {}
+    )()
+
+    fake.effective_user=q.from_user
+    fake.message=q.message
+    fake.effective_message=q.message
+
+    await cmd_start(
+        fake,
+        context
+    )
 
 async def cmd_redeem(update,context):
     cfg=load_config(); tg=update.effective_user; uid=str(tg.id)
@@ -3004,7 +3521,7 @@ async def on_callback(update,context):
         return
 
     # all others need gate
-    allowed,ud,users=await gate_cb(query,context)
+    allowed, cfg, u = await gate_cb(update, context)
     if not allowed: return
 
     if data=="start_check":
@@ -4232,17 +4749,47 @@ async def cmd_stats(update,context):
         parse_mode=ParseMode.HTML)
 
 @admin_or_mini_admin('broadcast')
-async def cmd_broadcast(update,context):
-    if not context.args: await update.message.reply_text("Usage: <code>/broadcast Your message</code>",parse_mode=ParseMode.HTML); return
-    msg=" ".join(context.args); users=load_users()
-    bt=(f"{msg}")
-    ok=fail=0
-    sm=await update.message.reply_text(f"📢 Broadcasting to <code>{len(users)}</code> users…",parse_mode=ParseMode.HTML)
-    for uid2 in users:
-        try: await context.bot.send_message(chat_id=int(uid2),text=bt,parse_mode=ParseMode.HTML); ok+=1
-        except: fail+=1
+async def cmd_broadcast(update, context):
+
+    users = load_users()
+
+    ok = 0
+    fail = 0
+
+    status = await update.message.reply_text(
+        f"📢 Broadcasting to {len(users)} users..."
+    )
+
+    # If replying to media/text -> broadcast that
+    target = update.message.reply_to_message
+
+    if not target:
+        await status.edit_text(
+            "Reply to a message/photo/video with /broadcast"
+        )
+        return
+
+    for uid in users:
+        try:
+
+            await context.bot.copy_message(
+                chat_id=int(uid),
+                from_chat_id=update.effective_chat.id,
+                message_id=target.message_id
+            )
+
+            ok += 1
+
+        except Exception:
+            fail += 1
+
         await asyncio.sleep(0.05)
-    await sm.edit_text(f"📢 <b>Done!</b> ✅ {ok} sent  ❌ {fail} failed",parse_mode=ParseMode.HTML)
+
+    await status.edit_text(
+        f"📢 Broadcast Finished\n\n"
+        f"✅ Sent: {ok}\n"
+        f"❌ Failed: {fail}"
+    )
 
 
 @admin_or_mini_admin('setlimit')
@@ -5902,6 +6449,7 @@ def main():
         # ── User ──────────────────────────────────────────────────────────
         application.add_handler(CommandHandler("start",           cmd_start))
         application.add_handler(CommandHandler("redeem",          cmd_redeem))
+        application.add_handler(CallbackQueryHandler(verify_join, pattern="^verify_join$"))
         application.add_handler(CommandHandler("stop",            cmd_stop))
         application.add_handler(CommandHandler("cancel",          cmd_cancel))
         application.add_handler(CommandHandler("hitson",          cmd_hits_on))
